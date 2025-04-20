@@ -1,63 +1,124 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Container, 
-  Box, 
-  TextField, 
-  Button, 
-  Paper, 
-  Typography,
-  List,
-  ListItem,
-  ListItemText,
+import {
+  Box,
+  Container,
+  TextField,
+  IconButton,
   AppBar,
-  Toolbar
+  Toolbar,
+  Typography,
+  Paper,
+  CircularProgress,
+  Snackbar,
+  Alert,
 } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
+import MenuIcon from '@mui/icons-material/Menu';
+import { useDispatch, useSelector } from 'react-redux';
+import { RootState } from './store';
+import {
+  addMessage,
+  createConversation,
+  setLoading,
+  setError,
+} from './store/chatSlice';
+import MessageBubble from './components/MessageBubble';
+import TypingIndicator from './components/TypingIndicator';
+import Sidebar from './components/Sidebar';
+import { api } from './services/api';
+import { v4 as uuidv4 } from 'uuid';
 
 interface Message {
-  type: 'user' | 'response';
+  id: string;
   content: string;
+  role: 'user' | 'assistant';
+  timestamp: string;
 }
 
 const App: React.FC = () => {
-  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
-  const [socket, setSocket] = useState<WebSocket | null>(null);
+  const [isTyping, setIsTyping] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [snackbarOpen, setSnackbarOpen] = useState(false);
+  const [clientId] = useState(() => Math.random().toString(36).substring(7));
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [snackbarMessage, setSnackbarMessage] = useState('');
+  const [snackbarSeverity, setSnackbarSeverity] = useState<'success' | 'error'>('success');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const dispatch = useDispatch();
+  const { conversations, currentConversationId, isLoading } = useSelector(
+    (state: RootState) => state.chat
+  );
+
+  const currentConversation = conversations.find(
+    (conv) => conv.id === currentConversationId
+  );
 
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8000/ws');
-    
-    ws.onopen = () => {
-      console.log('Connected to WebSocket');
-    };
-
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      setMessages(prev => [...prev, { type: 'response', content: data.content }]);
-    };
-
-    ws.onclose = () => {
-      console.log('Disconnected from WebSocket');
-    };
-
-    setSocket(ws);
-
-    return () => {
-      ws.close();
-    };
-  }, []);
+    if (!currentConversationId && conversations.length === 0) {
+      dispatch(createConversation());
+    }
+  }, [currentConversationId, conversations.length, dispatch]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [currentConversation?.messages]);
 
-  const handleSend = () => {
-    if (input.trim() && socket) {
-      const message = input.trim();
-      setMessages(prev => [...prev, { type: 'user', content: message }]);
-      socket.send(message);
-      setInput('');
+  useEffect(() => {
+    if (error) {
+      setSnackbarMessage(error);
+      setSnackbarSeverity('error');
+      setSnackbarOpen(true);
+    }
+  }, [error]);
+
+  const showSnackbar = (message: string, severity: 'success' | 'error' = 'success') => {
+    setSnackbarMessage(message);
+    setSnackbarSeverity(severity);
+    setSnackbarOpen(true);
+  };
+
+  const handleSend = async () => {
+    if (!input.trim()) return;
+
+    if (!currentConversationId) {
+      setError('No active conversation');
+      setSnackbarOpen(true);
+      return;
+    }
+
+    const userMessage = {
+      conversationId: currentConversationId,
+      message: {
+        content: input,
+        role: 'user' as const,
+      }
+    };
+
+    dispatch(addMessage(userMessage));
+    setInput('');
+    setIsTyping(true);
+
+    try {
+      console.log('Sending message to backend...');
+      const response = await api.sendMessage(input, clientId);
+      console.log('Received response from backend:', response);
+      
+      const aiMessage = {
+        conversationId: currentConversationId,
+        message: {
+          content: response.response,
+          role: 'assistant' as const,
+        }
+      };
+      
+      dispatch(addMessage(aiMessage));
+    } catch (error: any) {
+      console.error('Error sending message:', error);
+      setError(error.response?.data?.detail || error.message || 'Failed to send message');
+      setSnackbarOpen(true);
+    } finally {
+      setIsTyping(false);
     }
   };
 
@@ -68,73 +129,105 @@ const App: React.FC = () => {
     }
   };
 
+  const handleCloseSnackbar = () => {
+    setSnackbarOpen(false);
+  };
+
   return (
-    <Box sx={{ flexGrow: 1, height: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <AppBar position="static">
+    <Box sx={{ display: 'flex', height: '100vh' }}>
+      <AppBar position="fixed" sx={{ zIndex: (theme) => theme.zIndex.drawer + 1 }}>
         <Toolbar>
-          <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
+          <IconButton
+            color="inherit"
+            edge="start"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            sx={{ mr: 2 }}
+          >
+            <MenuIcon />
+          </IconButton>
+          <Typography variant="h6" noWrap component="div">
             Agent Chat
           </Typography>
         </Toolbar>
       </AppBar>
-      
-      <Container maxWidth="md" sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', py: 2 }}>
-        <Paper 
-          elevation={3} 
-          sx={{ 
-            flexGrow: 1, 
-            mb: 2, 
-            p: 2, 
-            overflow: 'auto',
-            display: 'flex',
-            flexDirection: 'column'
-          }}
-        >
-          <List>
-            {messages.map((message, index) => (
-              <ListItem key={index} sx={{ 
-                justifyContent: message.type === 'user' ? 'flex-end' : 'flex-start',
-                mb: 1
-              }}>
-                <Paper
-                  elevation={1}
-                  sx={{
-                    p: 2,
-                    maxWidth: '70%',
-                    backgroundColor: message.type === 'user' ? '#1976d2' : '#f5f5f5',
-                    color: message.type === 'user' ? 'white' : 'black'
-                  }}
-                >
-                  <ListItemText primary={message.content} />
-                </Paper>
-              </ListItem>
-            ))}
-            <div ref={messagesEndRef} />
-          </List>
-        </Paper>
 
-        <Box sx={{ display: 'flex', gap: 1 }}>
-          <TextField
-            fullWidth
-            variant="outlined"
-            placeholder="Type your message..."
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyPress={handleKeyPress}
-            multiline
-            maxRows={4}
-          />
-          <Button
-            variant="contained"
-            color="primary"
-            onClick={handleSend}
-            disabled={!input.trim()}
-            sx={{ minWidth: '100px' }}
+      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+
+      <Box
+        component="main"
+        sx={{
+          flexGrow: 1,
+          p: 3,
+          width: { sm: `calc(100% - 240px)` },
+          ml: { sm: '240px' },
+        }}
+      >
+        <Toolbar />
+        <Container maxWidth="md" sx={{ height: 'calc(100% - 64px)' }}>
+          <Paper
+            elevation={3}
+            sx={{
+              height: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              p: 2,
+            }}
           >
-            <SendIcon />
-          </Button>
-        </Box>
-      </Container>
+            <Box
+              sx={{
+                flexGrow: 1,
+                overflow: 'auto',
+                mb: 2,
+                display: 'flex',
+                flexDirection: 'column',
+              }}
+            >
+              {currentConversation?.messages.map((message) => (
+                <MessageBubble key={message.id} message={message} />
+              ))}
+              {isLoading && <TypingIndicator />}
+              <div ref={messagesEndRef} />
+            </Box>
+
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <TextField
+                fullWidth
+                variant="outlined"
+                placeholder="Type your message..."
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyPress={handleKeyPress}
+                multiline
+                maxRows={4}
+                disabled={isLoading}
+              />
+              <IconButton
+                color="primary"
+                onClick={handleSend}
+                disabled={!input.trim() || isLoading}
+                sx={{ alignSelf: 'flex-end' }}
+              >
+                {isLoading ? <CircularProgress size={24} /> : <SendIcon />}
+              </IconButton>
+            </Box>
+          </Paper>
+        </Container>
+      </Box>
+
+      <Snackbar
+        open={snackbarOpen}
+        autoHideDuration={6000}
+        onClose={handleCloseSnackbar}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert
+          onClose={handleCloseSnackbar}
+          severity={snackbarSeverity}
+          sx={{ width: '100%' }}
+        >
+          {snackbarMessage}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };

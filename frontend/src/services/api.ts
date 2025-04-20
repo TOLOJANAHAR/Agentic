@@ -5,11 +5,16 @@ const API_BASE_URL = 'http://localhost:8000';
 
 export const api = {
   sendMessage: async (content: string, clientId: string) => {
-    const response = await axios.post(`${API_BASE_URL}/chat`, {
-      content,
-      client_id: clientId,
-    });
-    return response.data;
+    try {
+      const response = await axios.post(`${API_BASE_URL}/chat`, {
+        content,
+        client_id: clientId
+      });
+      return response.data;
+    } catch (error) {
+      console.error('API Error:', error);
+      throw error;
+    }
   },
 
   getHistory: async (clientId: string) => {
